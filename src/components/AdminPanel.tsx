@@ -344,12 +344,15 @@ export const AdminPanel: React.FC = () => {
 
 
  // --- SMTP FORM FIELDS ---
+ const [smtpProvider, setSmtpProvider] = useState<string>(smtpSettings.provider || 'smtp');
  const [smtpEnabled, setSmtpEnabled] = useState(smtpSettings.isEnabled || false);
  const [smtpHost, setSmtpHost] = useState(smtpSettings.host ||'');
  const [smtpPort, setSmtpPort] = useState(smtpSettings.port ||'');
  const [smtpEmailVal, setSmtpEmailVal] = useState(smtpSettings.email ||'');
  const [smtpPassVal, setSmtpPassVal] = useState(smtpSettings.password ||'');
  const [smtpFromName, setSmtpFromName] = useState(smtpSettings.fromName ||'');
+ const [smtpApiKey, setSmtpApiKey] = useState(smtpSettings.apiKey ||'');
+ const [smtpMailgunDomain, setSmtpMailgunDomain] = useState(smtpSettings.mailgunDomain ||'');
  // OTP config
  const [otpEnabled, setOtpEnabled] = useState(smtpSettings.otpEnabled !== false);
  // BUG-44 FIX: Two useState calls were on the same line, making the code hard to
@@ -375,12 +378,15 @@ const [otpSubject, setOtpSubject] = useState(smtpSettings.otpSubject ||'');
   // when the backend-sourced smtpSettings object actually changes identity.
   useEffect(() => {
     if (!smtpSettings) return;
+    setSmtpProvider(smtpSettings.provider || 'smtp');
     setSmtpEnabled(smtpSettings.isEnabled || false);
     setSmtpHost(smtpSettings.host || '');
     setSmtpPort(smtpSettings.port || '');
     setSmtpEmailVal(smtpSettings.email || '');
     setSmtpPassVal(smtpSettings.password || '');
     setSmtpFromName(smtpSettings.fromName || '');
+    setSmtpApiKey(smtpSettings.apiKey || '');
+    setSmtpMailgunDomain(smtpSettings.mailgunDomain || '');
     setOtpEnabled(smtpSettings.otpEnabled !== false);
     setOtpExpiryMinutes(smtpSettings.otpExpiryMinutes || 10);
     setOtpSubject(smtpSettings.otpSubject || '');
@@ -1396,13 +1402,16 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  }
  };  const handleSaveSMTPCMS = async () => {
   try {
-  const current = {
+  const current: any = {
+  provider: smtpProvider,
   isEnabled: smtpEnabled,
   host: smtpHost,
   port: smtpPort,
   email: smtpEmailVal,
   password: smtpPassVal,
   fromName: smtpFromName,
+  apiKey: smtpApiKey,
+  mailgunDomain: smtpMailgunDomain,
   otpEnabled,
   otpExpiryMinutes,
   otpSubject,

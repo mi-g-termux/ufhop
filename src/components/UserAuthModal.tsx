@@ -330,7 +330,7 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
             to: emailKey,
             subject: `Your ${storeName} sign-in code`,
             html: otpHtml,
-            smtpSettings: { ...smtpSettings, fromName: smtpSettings.fromName || storeName },
+            // SECURITY FIX: Server reads email config from env vars. Client never sends SMTP passwords.
           }),
         });
         const otpData = await otpResponse.json().catch(() => ({}));

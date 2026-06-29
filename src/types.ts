@@ -257,13 +257,26 @@ export interface SiteSettings {
   maintenanceMessage?: string;
 }
 
+export type EmailProvider = 'smtp' | 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'ses' | 'none';
+
 export interface SMTPSettings {
+  // ── Provider selection ─────────────────────────────────────────────────
+  provider?: EmailProvider;   // 'smtp' (default) | 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'ses' | 'none'
+  // ── SMTP-specific fields ──────────────────────────────────────────────
   host: string;
   port: string | number;
   email: string;
   password?: string;
   fromName?: string;       // Sender display name, e.g. "My Store"
   isEnabled: boolean;
+  // ── API-based provider fields ──────────────────────────────────────────
+  apiKey?: string;         // Resend, SendGrid, Mailgun, Brevo API key
+  // ── Amazon SES specific ───────────────────────────────────────────────
+  sesAccessKeyId?: string;
+  sesSecretAccessKey?: string;
+  sesRegion?: string;
+  // ── Mailgun specific ──────────────────────────────────────────────────
+  mailgunDomain?: string;
   // OTP / Password-reset configuration
   otpEnabled?: boolean;    // Whether OTP email reset is active (default true when SMTP enabled)
   otpExpiryMinutes?: number; // How long OTP is valid (default 10)

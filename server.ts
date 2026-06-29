@@ -99,11 +99,17 @@ function getTransporter(smtp: any) {
   const cacheKey = `${smtp.host}:${smtp.port}:${smtp.email}`;
   if (_transporterCache.has(cacheKey)) return _transporterCache.get(cacheKey);
   const port = Number(smtp.port || 587);
+  // Respect SMTP_SECURE env var; fall back to port-based auto-detection
+  const envSecure = process.env.SMTP_SECURE === 'true' ? true : process.env.SMTP_SECURE === 'false' ? false : undefined;
+  const useSecure = envSecure !== undefined ? envSecure : port === 465;
   const t = nodemailer.createTransport({
     host: smtp.host,
     port,
-    secure: port === 465,
+    secure: useSecure,
     auth: { user: smtp.email, pass: smtp.password },
+    connectionTimeout: 30_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 30_000,
     tls: { rejectUnauthorized: false },
     pool: true,
     maxConnections: 5,
@@ -242,51 +248,249 @@ async function startServer() {
     }
   });
 
-  // --- SEND EMAIL ------------------------------------------------------------
+  // --- SEND EMAIL (Universal Email Service) ----------------------------------
+  // Supports SMTP, Resend, SendGrid, Mailgun, Brevo, Amazon SES.
+  // Provider config is resolved from environment variables first;
+  // client-sent smtpSettings are used as backward-compatible fallback.
+  // SMTP passwords and API keys are NEVER required from the client.
   app.post('/api/send-email', async (req: Request, res: Response) => {
     const raw = req.body || {};
     const to      = sanitizeStr(raw.to, 254);
     const subject = sanitizeStr(raw.subject, 200);
-    // BUG-01 FIX: Do NOT sanitize the html field — it is intentionally full of HTML
-    // tags (tables, styled divs, the OTP code box). sanitizeStr strips all tags via
-    // /<[^>]*>/g, turning every email into unstyled plain text.
-    const html    = typeof raw.html === 'string' ? raw.html.substring(0, 100000) : '';
-    const { smtpSettings, attachments } = raw;
+    const html    = typeof raw.html === 'string' ? raw.html.substring(0, 200000) : '';
+    const replyTo = typeof raw.replyTo === 'string' ? raw.replyTo : undefined;
+    const { attachments } = raw;
     if (!to || !subject || !html) return res.status(400).json({ error: 'Missing required fields: to, subject, html' });
     if (!isValidEmail(to)) return res.status(400).json({ error: 'Invalid email' });
-    const smtp = smtpSettings || { isEnabled: false };
-    if (!smtp.isEnabled || !smtp.host || !smtp.email || !smtp.password) {
-      console.log(`[EMAIL SKIPPED] SMTP not configured → ${to} | ${subject}`);
-      return res.json({ success: true, simulated: true, message: 'SMTP not configured — email skipped.' });
+
+    // Rate limit: 10 emails per recipient per minute
+    if (!checkRateLimit(`email:${to}`, 10, 60_000)) {
+      return res.status(429).json({ success: false, error: 'Too many email requests. Please wait before retrying.' });
     }
+
+    // ── Resolve provider: env vars FIRST, then client-sent fallback ────
+    const envProvider = (process.env.EMAIL_PROVIDER || 'smtp').trim();
+    const envEnabled  = process.env.EMAIL_ENABLED !== 'false';
+    const envHost     = process.env.SMTP_HOST || '';
+    const envPort     = Number(process.env.SMTP_PORT || 587);
+    const envSecure  = process.env.SMTP_SECURE === 'true' ? true : process.env.SMTP_SECURE === 'false' ? false : undefined;
+    const envEmail    = process.env.SMTP_EMAIL || process.env.EMAIL_FROM || '';
+    const envPass     = process.env.SMTP_PASSWORD || '';
+    const envFromName = process.env.EMAIL_FROM_NAME || '';
+    const envApiKey   = process.env.EMAIL_API_KEY || '';
+
+    const clientCfg = raw.smtpSettings || {};
+    const provider  = envProvider || clientCfg.provider || 'smtp';
+
+    // Determine if email is configured
+    const hasEnvConfig = envEnabled && (envHost || envApiKey);
+    const hasClientConfig = clientCfg.isEnabled && clientCfg.host && clientCfg.email && clientCfg.password;
+    if (!hasEnvConfig && !hasClientConfig) {
+      console.log(`[EMAIL SKIPPED] No provider configured → ${to} | ${subject}`);
+      return res.json({ success: true, simulated: true, message: 'Email service not configured. Configure a provider in Admin → Email Settings.' });
+    }
+
+    // Build sender
+    const senderEmail = envEmail || clientCfg.email || '';
+    const senderName  = envFromName || clientCfg.fromName || 'Store';
+    const from = senderName ? `"${senderName}" <${senderEmail}>` : senderEmail;
+
+    // Normalize attachments
+    const nmAttachments = Array.isArray(attachments)
+      ? attachments.filter((a: any) => a && typeof a.content === 'string' && a.content.length > 0)
+          .map((a: any) => ({
+            filename: a.filename || 'attachment',
+            content: Buffer.from(a.content, 'base64'),
+            contentType: a.contentType || 'application/octet-stream',
+          }))
+      : [];
+
+    const startTime = Date.now();
+
     try {
-      const transporter = getTransporter(smtp);
-      // Build nodemailer attachment list from the base64 payloads sent by the client.
-      // AppContext sends: [{ filename, content (raw base64), contentType }]
-      const nmAttachments = Array.isArray(attachments)
-        ? attachments
-            .filter((a: any) => a && typeof a.filename === 'string' && typeof a.content === 'string')
-            .map((a: any) => ({
-              filename:    a.filename,
-              content:     Buffer.from(a.content, 'base64'),
-              contentType: a.contentType || 'application/octet-stream',
-            }))
-        : undefined;
-      const info = await transporter.sendMail({
-        from: `"${smtp.fromName || 'Store'}" <${smtp.email}>`,
-        to, subject, html,
-        headers: { 'X-Priority': '1', 'X-Mailer': 'E-Shop Mailer v5.6' },
-        ...(nmAttachments && nmAttachments.length > 0 ? { attachments: nmAttachments } : {}),
-      });
-      console.log(`[EMAIL SENT] To: ${to} | ID: ${info.messageId}`);
-      return res.json({ success: true, messageId: info.messageId });
+      let messageId = '';
+
+      if (provider === 'resend') {
+        const apiKey = envApiKey || clientCfg.apiKey || '';
+        if (!apiKey) throw new Error('Resend API key not configured.');
+        const apiRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from, to: [to], subject, html, ...(replyTo ? { replyTo } : {}) }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const d = await apiRes.json().catch(() => ({}));
+        if (!apiRes.ok) throw new Error(d?.message || d?.error || `HTTP ${apiRes.status}`);
+        messageId = d.id;
+
+      } else if (provider === 'sendgrid') {
+        const apiKey = envApiKey || clientCfg.apiKey || '';
+        if (!apiKey) throw new Error('SendGrid API key not configured.');
+        const sgFrom = senderEmail;
+        const apiRes = await fetch('https://api.sendgrid.com/v3/mail/send', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email: to }], subject }],
+            from: { email: sgFrom },
+            content: [{ type: 'text/html', value: html }],
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!apiRes.ok && apiRes.status !== 202) {
+          const d = await apiRes.json().catch(() => ({}));
+          throw new Error(d?.errors?.[0]?.message || `HTTP ${apiRes.status}`);
+        }
+        messageId = apiRes.headers.get('x-message-id') || `sg_${Date.now()}`;
+
+      } else if (provider === 'brevo') {
+        const apiKey = envApiKey || clientCfg.apiKey || '';
+        if (!apiKey) throw new Error('Brevo API key not configured.');
+        const apiRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: { 'api-key': apiKey, 'Content-Type': 'application/json', 'accept': 'application/json' },
+          body: JSON.stringify({
+            sender: { email: senderEmail, name: senderName },
+            to: [{ email: to }], subject, htmlContent: html,
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const d = await apiRes.json().catch(() => ({}));
+        if (!apiRes.ok && apiRes.status !== 201) throw new Error(d?.message || `HTTP ${apiRes.status}`);
+        messageId = d.messageId || `brevo_${Date.now()}`;
+
+      } else if (provider === 'mailgun') {
+        const apiKey = envApiKey || clientCfg.apiKey || '';
+        const domain = envHost || clientCfg.mailgunDomain || clientCfg.host || '';
+        if (!apiKey || !domain) throw new Error('Mailgun API key and domain not configured.');
+        const fd = new FormData();
+        fd.append('from', from); fd.append('to', to); fd.append('subject', subject); fd.append('html', html);
+        const apiRes = await fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+          method: 'POST', headers: { 'Authorization': 'Basic ' + btoa(`api:${apiKey}`) }, body: fd,
+          signal: AbortSignal.timeout(30_000),
+        });
+        const d = await apiRes.json().catch(() => ({}));
+        if (!apiRes.ok) throw new Error(d?.message || `HTTP ${apiRes.status}`);
+        messageId = d.id;
+
+      } else {
+        // ── SMTP (default) ───────────────────────────────────────────────
+        const smtpHost = envHost || clientCfg.host || '';
+        const smtpPort = envPort || Number(clientCfg.port || 587);
+        const smtpUser = envEmail || clientCfg.email || '';
+        const smtpPass = envPass || clientCfg.password || '';
+        if (!smtpHost || !smtpUser || !smtpPass) {
+          throw new Error('SMTP credentials incomplete. Configure host, email, and password.');
+        }
+        const cacheKey = `${smtpHost}:${smtpPort}:${smtpUser}`;
+        let transporter = _transporterCache.get(cacheKey);
+        if (!transporter) {
+          const useSecure = envSecure !== undefined ? envSecure : smtpPort === 465;
+          transporter = nodemailer.createTransport({
+            host: smtpHost, port: smtpPort, secure: useSecure,
+            auth: { user: smtpUser, pass: smtpPass },
+            tls: { rejectUnauthorized: false },
+            pool: true, maxConnections: 5, maxMessages: 100, rateLimit: 14,
+          });
+          _transporterCache.set(cacheKey, transporter);
+        }
+        const info = await transporter.sendMail({
+          from, to, subject, html,
+          headers: { 'X-Priority': '1', 'X-Mailer': 'Fruitopia Mailer v2.0' },
+          ...(nmAttachments.length > 0 ? { attachments: nmAttachments } : {}),
+        });
+        messageId = info.messageId;
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`[EMAIL SENT] Provider: ${provider} | To: ${to} | ID: ${messageId} | ${duration}ms`);
+      return res.json({ success: true, messageId, provider, duration });
+
     } catch (err: any) {
-      _transporterCache.delete(`${smtp.host}:${smtp.port}:${smtp.email}`);
-      console.error('[EMAIL ERROR]', err.message);
-      return res.status(500).json({
-        success: false, error: 'Email delivery failed.',
-        hint: 'For Gmail: use an App Password. Enable 2FA → myaccount.google.com/apppasswords',
-      });
+      const duration = Date.now() - startTime;
+      console.error(`[EMAIL ERROR] Provider: ${provider} | To: ${to} | ${duration}ms | ${err.message}`);
+      let hint = '';
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('invalid login') || errMsg.includes('auth')) {
+        hint = 'Authentication failed. For Gmail/Outlook: use an App Password (not your login password). Enable 2FA first.';
+      } else if (errMsg.includes('certificate') || errMsg.includes('ssl') || errMsg.includes('tls')) {
+        hint = 'SSL/TLS error. Try port 587 (STARTTLS) or port 465 (implicit TLS).';
+      } else if (errMsg.includes('connection') || errMsg.includes('timeout') || errMsg.includes('econnrefused')) {
+        hint = 'Cannot connect. Verify host, port, and firewall settings.';
+      } else if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('unauthorized')) {
+        hint = 'API key or credentials are invalid. Check your provider dashboard.';
+      }
+      // Destroy cached transporter on auth/connection errors
+      if (errMsg.includes('auth') || errMsg.includes('connection') || errMsg.includes('timeout')) {
+        const smtpHost = envHost || clientCfg.host || '';
+        const smtpPort = envPort || Number(clientCfg.port || 587);
+        const smtpUser = envEmail || clientCfg.email || '';
+        _transporterCache.delete(`${smtpHost}:${smtpPort}:${smtpUser}`);
+      }
+      return res.status(500).json({ success: false, error: `Email delivery failed: ${err.message}`, hint, provider, duration });
+    }
+  });
+
+  // --- EMAIL PROVIDER TEST CONNECTION ----------------------------------------
+  // Tests the configured email provider without sending an email.
+  app.post('/api/email/test-connection', async (req: Request, res: Response) => {
+    const raw = req.body || {};
+    const cfg = raw.smtpSettings || raw;
+    const provider = (process.env.EMAIL_PROVIDER || cfg.provider || 'smtp').trim();
+
+    try {
+      if (provider === 'resend') {
+        const apiKey = process.env.EMAIL_API_KEY || cfg.apiKey || '';
+        if (!apiKey) return res.json({ success: false, error: 'Resend API key not configured.' });
+        const r = await fetch('https://api.resend.com/domains', {
+          headers: { 'Authorization': `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000),
+        });
+        if (r.ok) { const d = await r.json().catch(() => ({})); return res.json({ success: true, message: `Resend verified. ${(d?.data || []).length} domain(s).` }); }
+        if (r.status === 401) return res.json({ success: false, error: 'Invalid Resend API key.' });
+        return res.json({ success: false, error: `Resend verification failed (HTTP ${r.status}).` });
+
+      } else if (provider === 'sendgrid') {
+        const apiKey = process.env.EMAIL_API_KEY || cfg.apiKey || '';
+        if (!apiKey) return res.json({ success: false, error: 'SendGrid API key not configured.' });
+        const r = await fetch('https://api.sendgrid.com/v3/user/profile', {
+          headers: { 'Authorization': `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000),
+        });
+        if (r.ok) return res.json({ success: true, message: 'SendGrid API verified.' });
+        if (r.status === 401 || r.status === 403) return res.json({ success: false, error: 'Invalid SendGrid API key.' });
+        return res.json({ success: false, error: `SendGrid verification failed (HTTP ${r.status}).` });
+
+      } else if (provider === 'brevo') {
+        const apiKey = process.env.EMAIL_API_KEY || cfg.apiKey || '';
+        if (!apiKey) return res.json({ success: false, error: 'Brevo API key not configured.' });
+        const r = await fetch('https://api.brevo.com/v3/account', {
+          headers: { 'api-key': apiKey, 'accept': 'application/json' }, signal: AbortSignal.timeout(10_000),
+        });
+        if (r.ok) return res.json({ success: true, message: 'Brevo API verified.' });
+        if (r.status === 401) return res.json({ success: false, error: 'Invalid Brevo API key.' });
+        return res.json({ success: false, error: `Brevo verification failed (HTTP ${r.status}).` });
+
+      } else {
+        // SMTP verification
+        const smtpHost = process.env.SMTP_HOST || cfg.host || '';
+        const smtpPort = Number(process.env.SMTP_PORT || cfg.port || 587);
+        const smtpUser = process.env.SMTP_EMAIL || cfg.email || '';
+        const smtpPass = process.env.SMTP_PASSWORD || cfg.password || '';
+        if (!smtpHost || !smtpUser || !smtpPass) {
+          return res.json({ success: false, error: 'SMTP host, email, and password are required.' });
+        }
+        const useSecure = process.env.SMTP_SECURE === 'true' ? true : process.env.SMTP_SECURE === 'false' ? false : smtpPort === 465;
+        const t = nodemailer.createTransport({
+          host: smtpHost, port: smtpPort, secure: useSecure,
+          auth: { user: smtpUser, pass: smtpPass },
+          connectionTimeout: 10_000, greetingTimeout: 8_000,
+          tls: { rejectUnauthorized: false },
+        });
+        await t.verify();
+        try { await t.close(); } catch {}
+        return res.json({ success: true, message: `SMTP connection verified. Server: ${smtpHost}:${smtpPort}` });
+      }
+    } catch (err: any) {
+      return res.json({ success: false, error: `Connection test failed: ${err.message}` });
     }
   });
 

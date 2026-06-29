@@ -1201,7 +1201,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
             to: newProfile.email,
             subject: welcomeSubject,
             html: welcomeHtml,
-            smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+            // SECURITY FIX: Server reads email config from env vars. Client never sends SMTP passwords.
           }),
         }).catch(() => {});
       } catch { /* email failure is non-blocking */ }
@@ -1416,10 +1416,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     const evCfg = emailVerificationSettings;
     if (!evCfg?.isEnabled) return { success: true, message: 'Email verification not required.' };
 
-    // Check SMTP is configured before promising an email will arrive
-    if (!smtpSettings?.host || !smtpSettings?.email || !smtpSettings?.password) {
-      console.warn('[sendEmailVerification] SMTP not configured — verification email cannot be sent.');
-      return { success: false, message: 'Email service is not configured. Please contact the store admin to set up SMTP.' };
+    // Check that some email provider is configured (SMTP host+email+password, or API key for API providers)
+    const hasSmtp = smtpSettings?.isEnabled && smtpSettings?.host && smtpSettings?.email && smtpSettings?.password;
+    const hasApiKey = smtpSettings?.isEnabled && smtpSettings?.apiKey && smtpSettings?.provider && smtpSettings.provider !== 'smtp';
+    if (!hasSmtp && !hasApiKey) {
+      console.warn('[sendEmailVerification] Email provider not configured — verification email cannot be sent.');
+      return { success: false, message: 'Email service is not configured. Please contact the store admin to set up email in Admin → Settings → Email.' };
     }
 
     const token = Array.from(crypto.getRandomValues(new Uint8Array(24))).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -1550,10 +1552,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     if (!key || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) {
       return { success: false, message: 'Please enter a valid email address first.' };
     }
-    // Use the same admin-configured SMTP pipeline as every other email
-    // (welcome, order confirmation, password OTP). If SMTP isn't set,
-    // surface that to the user instead of silently "succeeding".
-    if (!smtpSettings || !smtpSettings.host || !smtpSettings.email) {
+    // Use the same admin-configured email pipeline as every other email.
+    // Support both SMTP (host+email+password) and API providers (apiKey).
+    const hasSmtp = smtpSettings?.isEnabled && smtpSettings?.host && smtpSettings?.email && smtpSettings?.password;
+    const hasApiKey = smtpSettings?.isEnabled && smtpSettings?.apiKey && smtpSettings?.provider && smtpSettings.provider !== 'smtp';
+    if (!hasSmtp && !hasApiKey) {
       return { success: false, message: 'Email service is not configured. Please contact the store admin.' };
     }
     if (smtpSettings.otpEnabled === false) {
@@ -1644,7 +1647,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         return { success: false, message: 'An account already exists with this email. Please log in instead.' };
       }
     } catch { /* non-fatal — registerUser will catch duplicates again */ }
-    if (!smtpSettings?.host || !smtpSettings?.email) {
+    const hasSmtp = smtpSettings?.isEnabled && smtpSettings?.host && smtpSettings?.email && smtpSettings?.password;
+    const hasApiKey = smtpSettings?.isEnabled && smtpSettings?.apiKey && smtpSettings?.provider && smtpSettings.provider !== 'smtp';
+    if (!hasSmtp && !hasApiKey) {
       return { success: false, message: 'Email service is not configured. Contact the store admin.' };
     }
     const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -1745,7 +1750,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
               <div style="text-align:center;margin:16px 0;"><a href="${resetUrl}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700;font-size:14px;">Set My Password →</a></div>
               <p style="color:#64748b;font-size:12px;">This code expires in ${expiryMinutes} minutes. You are already logged in on the device where you placed the order.</p>
             </div>`,
-            smtpSettings: smtpSettings ? { ...smtpSettings, fromName: smtpSettings.fromName || storeName } : null,
+            // SECURITY FIX: Server reads email config from env vars. Client never sends SMTP passwords.
           }),
         });
         return true;
