@@ -203,6 +203,21 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       const pendingRaw   = localStorage.getItem('qf_pending_order');
       const pendingEmail = localStorage.getItem('qf_pending_email');
       if (!pendingRaw) return;
+      // ── DUPLICATE-ORDER FIX ──────────────────────────────────────────────
+      // Consume (remove) the pending order from localStorage RIGHT NOW,
+      // synchronously, before placeOrder() is even called — not afterwards
+      // inside the .then(). `handledGatewayCallbackRef` only protects against
+      // this effect re-firing within the SAME page mount; it resets to false
+      // on every real browser refresh. If the customer refreshes the page
+      // while the gateway's success params are still in the URL (a slow
+      // redirect, a flaky connection, or just habit), this effect runs again
+      // on the fresh page load, finds the same `qf_pending_order` still
+      // sitting in localStorage (it was only ever cleared *after* the order
+      // succeeded), and calls placeOrder() a second time — creating a second
+      // order with a brand-new id/orderNumber. Removing it here, before any
+      // async work starts, means a second run of this code (refresh or
+      // otherwise) finds nothing to submit and returns immediately above.
+      localStorage.removeItem('qf_pending_order');
       try {
         const pendingOrder = JSON.parse(pendingRaw);
         if (methodOverride) pendingOrder.paymentMethod = methodOverride;
@@ -224,6 +239,13 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           toast.success(`Payment confirmed. Order ${placed.orderNumber} confirmed.`);
           clearPendingPayment();
           window.history.replaceState({}, '', window.location.pathname);
+        }).catch((err) => {
+          // placeOrder itself failed (network/DB error). We've already
+          // consumed qf_pending_order above, so we can't silently retry —
+          // surface this loudly so the customer contacts support rather
+          // than the order vanishing with no trace.
+          console.error('[CartModal] placeOrder failed after payment confirmation:', err);
+          toast.error('Payment was confirmed but we could not save your order. Please contact support with your transaction reference.');
         });
       } catch {
         clearPendingPayment();
@@ -255,6 +277,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
       }
 
       handledGatewayCallbackRef.current = true;
+      window.history.replaceState({}, '', window.location.pathname);
       fetch('/api/bkash/execute-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -275,13 +298,11 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           } else {
             toast.error(data.error || 'bKash payment verification failed.');
             clearPendingPayment();
-            window.history.replaceState({}, '', window.location.pathname);
           }
         })
         .catch(() => {
           toast.error('bKash payment verification failed. Contact support.');
           clearPendingPayment();
-          window.history.replaceState({}, '', window.location.pathname);
         });
       return;
     }
@@ -302,6 +323,7 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
         window.history.replaceState({}, '', window.location.pathname);
         return;
       }
+      window.history.replaceState({}, '', window.location.pathname);
       fetch('/api/nagad/verify-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -314,26 +336,35 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
           } else {
             toast.error(data.error || 'Nagad payment verification failed. Payment failed; no order was created.');
             clearPendingPayment();
-            window.history.replaceState({}, '', window.location.pathname);
           }
         })
         .catch(() => {
           toast.error('Nagad payment verification failed. Payment failed; no order was created.');
           clearPendingPayment();
-          window.history.replaceState({}, '', window.location.pathname);
         });
     } else if (sslStatus === 'success') {
+      if (handledGatewayCallbackRef.current) return;
+      handledGatewayCallbackRef.current = true;
       if (!sslValidationId) {
         toast.error('SSLCommerz returned success without a validation id. Payment failed; no order was created.');
         clearPendingPayment();
         window.history.replaceState({}, '', window.location.pathname);
       } else {
+        // Strip the success params from the URL immediately — not after
+        // completePendingOrder resolves — so a refresh mid-flight lands on
+        // a clean URL instead of re-triggering this whole branch again.
+        window.history.replaceState({}, '', window.location.pathname);
         completePendingOrder(`SSLCommerz (val: ${sslValidationId})`);
       }
     } else if (paypalStatus === 'approved') {
+      if (handledGatewayCallbackRef.current) return;
+      handledGatewayCallbackRef.current = true;
       const paypalOrderId = localStorage.getItem('qf_paypal_order_id') || params.get('token') || '';
 
       if (paypalOrderId) {
+        // Same reasoning as SSLCommerz above — clear the URL before the
+        // async capture/verify call, not after.
+        window.history.replaceState({}, '', window.location.pathname);
         fetch('/api/paypal/capture-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -350,12 +381,10 @@ export const CartModal = ({ isOpen, onClose, emailVerified = true }: CartModalPr
             } else {
               toast.error(`PayPal capture failed: ${data.error}`);
               clearPendingPayment();
-              window.history.replaceState({}, '', window.location.pathname);
             }
           })
           .catch(() => {
             toast.error('PayPal capture network error. Contact support.');
-            window.history.replaceState({}, '', window.location.pathname);
           });
       }
     } else if (failStatuses.some(Boolean)) {
