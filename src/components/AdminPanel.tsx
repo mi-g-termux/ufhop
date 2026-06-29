@@ -1490,15 +1490,17 @@ await saveSiteSettings(JSON.parse(JSON.stringify(current)));
  body: JSON.stringify({
  to: otpTestEmail.trim(),
  subject: otpSubject ||`[${storeName}] Your OTP Code: ${code}`,
- html,
- smtpSettings: {
- isEnabled: smtpEnabled,
- host: smtpHost,
- port: smtpPort,
- email: smtpEmailVal,
- password: smtpPassVal,
- fromName: smtpFromName,
- },
+ html,  smtpSettings: {
+  provider: smtpProvider,
+  isEnabled: smtpEnabled,
+  host: smtpHost,
+  port: smtpPort,
+  email: smtpEmailVal,
+  password: smtpPassVal,
+  fromName: smtpFromName,
+  apiKey: smtpApiKey,
+  mailgunDomain: smtpMailgunDomain,
+  },
  }),
  });
  const data = await res.json();
@@ -3320,7 +3322,61 @@ payFastLogoImageUrl: brandPayFastLogo,
 
    {smtpSubTab === 'server' && (
  <div className="space-y-5"> <div> <h4 className="text-xs font-bold uppercase text-slate-400"> SMTP CLIENT EMAIL SERVER</h4> <p className="text-xs text-slate-400 font-semibold leading-relaxed mt-1">Configure your outgoing mail server. Used for order receipts, OTP password resets, and newsletter emails. When disabled, emails are skipped (simulated in console).</p> </div> {/* ── Enable toggle ── */}
- <div className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200"> <input type="checkbox" id="smtp-en" checked={smtpEnabled} onChange={(e) => setSmtpEnabled(e.target.checked)} className="scale-110 accent-emerald-600 rounded cursor-pointer" /> <label htmlFor="smtp-en" className="text-xs font-bold uppercase cursor-pointer text-slate-700">Enable SMTP active client delivery</label> </div> {/* ── Server credentials ── */}
+ <div className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200"> <input type="checkbox" id="smtp-en" checked={smtpEnabled} onChange={(e) => setSmtpEnabled(e.target.checked)} className="scale-110 accent-emerald-600 rounded cursor-pointer" /> <label htmlFor="smtp-en" className="text-xs font-bold uppercase cursor-pointer text-slate-700">Enable email delivery</label> </div> {/* ── Server credentials ── */}
+ {/* ── Provider selection ── */}
+ <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Email Provider</label> <select value={smtpProvider} onChange={(e) => setSmtpProvider(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 outline-none font-medium focus:ring-1 focus:ring-emerald-400"> <optgroup label="SMTP Servers"> <option value="smtp">Custom SMTP (Gmail, Outlook, Zoho, Hostinger, cPanel, etc.)</option> </optgroup> <optgroup label="Email APIs (Recommended)"> <option value="resend">Resend API</option> <option value="sendgrid">SendGrid API</option> <option value="mailgun">Mailgun API</option> <option value="brevo">Brevo (Sendinblue) API</option> </optgroup> <optgroup label="Cloud Provider SMTP"> <option value="ses">Amazon SES SMTP</option> </optgroup> </select> <p className="text-[9px] text-slate-400 mt-1">{smtpProvider === 'smtp' ? 'Use any SMTP server (Gmail, Outlook, Zoho, Hostinger, cPanel, Resend SMTP, etc.)' : smtpProvider === 'resend' ? 'Requires Resend API key. Visit resend.com' : smtpProvider === 'sendgrid' ? 'Requires SendGrid API key. Visit sendgrid.com -> Settings -> API Keys' : smtpProvider === 'mailgun' ? 'Requires Mailgun API key + domain. Visit mailgun.com' : smtpProvider === 'brevo' ? 'Requires Brevo API key. Visit brevo.com -> SMTP & API -> API Keys' : 'Uses Amazon SES SMTP transport. Enter SES credentials below.'}</p> </div>
+ {/* ── API Key field (for API providers) ── */}
+ {smtpProvider !== 'smtp' && smtpProvider !== 'ses' && (
+ <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">API Key</label> <input type="password" value={smtpApiKey} onChange={(e) => setSmtpApiKey(e.target.value)} placeholder={smtpProvider === 'resend' ? 're_...' : smtpProvider === 'sendgrid' ? 'SG.xxx...' : smtpProvider === 'mailgun' ? 'key-xxx...' : 'xkeysib-...'} className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 outline-none font-mono focus:ring-1 focus:ring-emerald-400" /> </div>
+ )}
+ {/* ── Mailgun domain field ── */}
+ {smtpProvider === 'mailgun' && (
+ <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Mailgun Sending Domain</label> <input type="text" value={smtpMailgunDomain} onChange={(e) => setSmtpMailgunDomain(e.target.value)} placeholder="mg.yourdomain.com" className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 outline-none font-mono focus:ring-1 focus:ring-emerald-400" /> </div>
+ )}
+ {/* ── Provider-specific guidance hints ── */}
+ {smtpProvider === 'smtp' && (
+ <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-1.5">
+ <p className="text-[10px] font-extrabold uppercase text-amber-700">SMTP Quick Reference</p>
+ <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[9px] text-amber-800 leading-relaxed">
+ <p><strong>Gmail:</strong> Host smtp.gmail.com, Port 587. Use an <em>App Password</em> (enable 2FA first, then generate at myaccount.google.com/apppasswords). Do NOT use your login password.</p>
+ <p><strong>Outlook:</strong> Host smtp-mail.outlook.com, Port 587. Use an <em>App Password</em> (account.microsoft.com → Security → App passwords).</p>
+ <p><strong>Zoho:</strong> Host smtp.zoho.com, Port 465 (TLS) or 587 (STARTTLS). Use an App Password from zoho.com/cpanel → SMTP.</p>
+ <p><strong>Hostinger:</strong> Host smtp.hostinger.com, Port 465 or 587. Use your email account password.</p>
+ <p><strong>cPanel:</strong> Host mail.yourdomain.com, Port 465 or 587. Username is your full email address.</p>
+ <p><strong>Resend SMTP:</strong> Host smtp.resend.com, Port 465. Username must be <code>resend</code> (not your email).</p>
+ </div>
+ </div>
+ )}
+ {smtpProvider === 'resend' && (
+ <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+ <p className="text-[10px] font-extrabold uppercase text-blue-700 mb-1">Resend API Setup</p>
+ <p className="text-[9px] text-blue-800 leading-relaxed">1. Sign up at <strong>resend.com</strong> → 2. Go to <strong>API Keys</strong> → Create a new key → 3. Paste the key above. Resend includes 100 free emails/day. No SMTP host/port needed.</p>
+ </div>
+ )}
+ {smtpProvider === 'sendgrid' && (
+ <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+ <p className="text-[10px] font-extrabold uppercase text-blue-700 mb-1">SendGrid API Setup</p>
+ <p className="text-[9px] text-blue-800 leading-relaxed">1. Sign up at <strong>sendgrid.com</strong> → 2. Go to <strong>Settings → API Keys</strong> → Create key with <em>Mail Send</em> permission → 3. Paste the <code>SG.xxx</code> key above. Free tier: 100 emails/day.</p>
+ </div>
+ )}
+ {smtpProvider === 'mailgun' && (
+ <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+ <p className="text-[10px] font-extrabold uppercase text-blue-700 mb-1">Mailgun API Setup</p>
+ <p className="text-[9px] text-blue-800 leading-relaxed">1. Sign up at <strong>mailgun.com</strong> → 2. Add and verify your domain → 3. Go to <strong>API Keys</strong> → Copy your private key → 4. Enter the key and your sending domain (e.g. <code>mg.yourdomain.com</code>) above.</p>
+ </div>
+ )}
+ {smtpProvider === 'brevo' && (
+ <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+ <p className="text-[10px] font-extrabold uppercase text-blue-700 mb-1">Brevo (Sendinblue) API Setup</p>
+ <p className="text-[9px] text-blue-800 leading-relaxed">1. Sign up at <strong>brevo.com</strong> → 2. Go to <strong>SMTP & API → API Keys</strong> → Create a new key → 3. Paste the <code>xkeysib-</code> key above. Free tier: 300 emails/day.</p>
+ </div>
+ )}
+ {smtpProvider === 'ses' && (
+ <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+ <p className="text-[10px] font-extrabold uppercase text-orange-700 mb-1">Amazon SES SMTP Setup</p>
+ <p className="text-[9px] text-orange-800 leading-relaxed">Host: <code>email-smtp.{'{'}your-region{'}'}.amazonaws.com</code>. Username = your <em>IAM Access Key ID</em> (NOT your email). Password = your <em>IAM Secret Access Key</em>. Port 465 (TLS) or 587 (STARTTLS). Verify your sender email in SES first.</p>
+ </div>
+ )}
  <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3"> <p className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider"> Server Credentials</p> <div className="grid grid-cols-1 md:grid-cols-2 gap-3"> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Mail Host</label> <input type="text" value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.gmail.com"
  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Port (TLS/SSL)</label> <input type="text" value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} placeholder="587 (TLS) or 465 (SSL)"
  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none transition-all" /> </div> <div> <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">Sender Email Address</label> <input type="email" value={smtpEmailVal} onChange={(e) => setSmtpEmailVal(e.target.value)} placeholder="sender@gmail.com"
