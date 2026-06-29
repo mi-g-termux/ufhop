@@ -1203,8 +1203,15 @@ export const UserAuthModal = ({ isOpen, onClose, defaultTab = 'signin' }: UserAu
             const currencySymbol = siteSettings?.currencySymbol || '$';
             const currencyPosition = (siteSettings?.currencyPosition || 'before') as 'before' | 'after';
             const fmt = (n: number) => currencyPosition === 'before' ? `${currencySymbol}${n.toFixed(2)}` : `${n.toFixed(2)}${currencySymbol}`;
-            const userOrders: Order[] = orders
+            // FIX: Deduplicate orders that match both orderIds AND email conditions.
+            // Using OR logic without dedup caused orders to appear twice in the list
+            // when the order was in orderIds AND the email also matched (which is the
+            // normal case after ensureUserAfterCheckout runs post-checkout).
+            const userOrdersMap = new Map<string, Order>();
+            orders
               .filter(o => userProfile.orderIds?.includes(o.id) || o.email?.toLowerCase() === userProfile.email?.toLowerCase())
+              .forEach(o => { if (!userOrdersMap.has(o.id)) userOrdersMap.set(o.id, o); });
+            const userOrders: Order[] = Array.from(userOrdersMap.values())
               .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
             const statusColor: Record<string, string> = {

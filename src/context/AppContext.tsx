@@ -1962,7 +1962,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       paymentStatus: orderData.paymentStatus ?? 'Pending',
     };
     await dbService.saveOrder(newOrder);
-    setOrders(prev => [newOrder, ...prev]);
+    // FIX: Deduplicate on optimistic update to prevent double-entry if real-time
+    // listener fires concurrently (Firebase onSnapshot / Supabase postgres_changes).
+    setOrders(prev => [newOrder, ...prev.filter(o => o.id !== newOrder.id)]);
 
     // ── Increment coupon usedCount if a coupon was applied ────────────────
     if (newOrder.couponApplied) {
