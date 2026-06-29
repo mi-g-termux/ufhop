@@ -1279,6 +1279,7 @@ GRANT ALL                            ON product_variants       TO service_role;
 
 -- ── Enable Realtime on settings ─────────────────────────────────────────────
 ALTER PUBLICATION supabase_realtime ADD TABLE settings;
+ALTER PUBLICATION supabase_realtime ADD TABLE orders;
 
 -- ── Enable RLS on every table ────────────────────────────────────────────────
 ALTER TABLE settings              ENABLE ROW LEVEL SECURITY;
@@ -1410,7 +1411,7 @@ service cloud.firestore {
     match /coupons/{id}     { allow read: if true; allow write: if request.auth != null; }
     match /settings/{id}    { allow read: if true; allow write: if request.auth != null; }
     // Customer submissions
-    match /orders/{id}      { allow create: if true; allow read, update, delete: if request.auth != null; }
+    match /orders/{id}      { allow create: if true; allow get: if true; allow list: if request.auth != null || (request.query.limit != null && request.query.limit <= 10); allow update, delete: if request.auth != null; }
     match /newsletter/{id}  { allow create: if true; allow read, update, delete: if request.auth != null; }
 
     // Customer accounts (signup, guest checkout, Google sign-in). Shoppers

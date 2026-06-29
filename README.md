@@ -35,33 +35,87 @@ npm run dev
 3. Go to **SQL Editor** and run this schema:
 
 ```sql
-CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value JSONB);
-CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+-- Copy-paste this entire block into Supabase → SQL Editor, then click Run.
+-- (The Install Wizard also prints this — you can use either.)
+
+CREATE TABLE IF NOT EXISTS settings   (key TEXT PRIMARY KEY, value JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS products   (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS orders     (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS coupons    (id TEXT PRIMARY KEY, data JSONB NOT NULL);
 CREATE TABLE IF NOT EXISTS categories (id TEXT PRIMARY KEY, data JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, data JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, data JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, data JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS coupons (id TEXT PRIMARY KEY, data JSONB NOT NULL);
-CREATE TABLE IF NOT EXISTS phone_index (phone_key TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS newsletter (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS reviews    (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS users      (id TEXT PRIMARY KEY, data JSONB NOT NULL);
 
--- Row Level Security (open for anon key — store handles auth itself)
-ALTER TABLE settings    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE products    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE categories  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE users       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE reviews     ENABLE ROW LEVEL SECURITY;
-ALTER TABLE coupons     ENABLE ROW LEVEL SECURITY;
-ALTER TABLE phone_index ENABLE ROW LEVEL SECURITY;
+-- Gallery + Variant tables
+CREATE TABLE IF NOT EXISTS product_images         (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS product_variant_groups (id TEXT PRIMARY KEY, data JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS product_variants       (id TEXT PRIMARY KEY, data JSONB NOT NULL);
 
-CREATE POLICY "anon_all" ON settings    FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON products    FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON categories  FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON orders      FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON users       FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON reviews     FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON coupons     FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "anon_all" ON phone_index FOR ALL USING (true) WITH CHECK (true);
+-- Grants (anon = your storefront's public key)
+GRANT SELECT, INSERT, UPDATE, DELETE ON settings   TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON products   TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON orders     TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON coupons    TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON categories TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON newsletter TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON reviews    TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON users      TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON product_images         TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON product_variant_groups TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON product_variants       TO anon;
+
+-- Enable Realtime on settings + orders (for live order tracking)
+ALTER PUBLICATION supabase_realtime ADD TABLE settings;
+ALTER PUBLICATION supabase_realtime ADD TABLE orders;
+
+-- Enable RLS + Policies
+ALTER TABLE settings              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE products              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE coupons               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE categories            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE newsletter            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reviews               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_images         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_variant_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_variants       ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "public read settings"          ON settings              FOR SELECT USING (true);
+CREATE POLICY "public read products"          ON products              FOR SELECT USING (true);
+CREATE POLICY "public read categories"        ON categories            FOR SELECT USING (true);
+CREATE POLICY "public read reviews"           ON reviews               FOR SELECT USING (true);
+CREATE POLICY "public read coupons"           ON coupons               FOR SELECT USING (true);
+CREATE POLICY "public read product_images"    ON product_images         FOR SELECT USING (true);
+CREATE POLICY "public read variant_groups"    ON product_variant_groups FOR SELECT USING (true);
+CREATE POLICY "public read product_variants"  ON product_variants       FOR SELECT USING (true);
+CREATE POLICY "admin write settings"      ON settings   FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin update settings"     ON settings   FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "admin delete settings"     ON settings   FOR DELETE USING (true);
+CREATE POLICY "admin write products"      ON products   FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin update products"     ON products   FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "admin delete products"     ON products   FOR DELETE USING (true);
+CREATE POLICY "admin write categories"    ON categories FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin update categories"   ON categories FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "admin delete categories"   ON categories FOR DELETE USING (true);
+CREATE POLICY "admin write coupons"       ON coupons    FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin update coupons"      ON coupons    FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "admin delete coupons"      ON coupons    FOR DELETE USING (true);
+CREATE POLICY "anon write pimages"        ON product_images         FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "anon write pvgroups"       ON product_variant_groups FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "anon write pvariants"      ON product_variants       FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "public create orders"     ON orders     FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin read orders"        ON orders     FOR SELECT USING (true);
+CREATE POLICY "admin update orders"      ON orders     FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "admin delete orders"      ON orders     FOR DELETE USING (true);
+CREATE POLICY "public create reviews"    ON reviews    FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin update reviews"     ON reviews    FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "admin delete reviews"     ON reviews    FOR DELETE USING (true);
+CREATE POLICY "public create newsletter" ON newsletter FOR INSERT WITH CHECK (true);
+CREATE POLICY "admin read newsletter"    ON newsletter FOR SELECT USING (true);
+CREATE POLICY "admin delete newsletter"  ON newsletter FOR DELETE USING (true);
+CREATE POLICY "public write users"       ON users      FOR ALL USING (true) WITH CHECK (true);
 ```
 
 4. Open the Install Wizard and paste your URL + anon key.

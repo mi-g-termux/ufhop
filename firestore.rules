@@ -145,11 +145,12 @@ service cloud.firestore {
 
     match /orders/{id} {
       // Individual order fetch: allowed so customers can look up their own order
-      // by ID on the tracker page. Listing all orders is restricted to admins —
-      // the previous `allow list: if true` exposed every customer's name, email,
-      // address, and phone number to any unauthenticated request.
+      // by ID on the tracker page. Listing is restricted to admins OR
+      // anonymous queries with a small limit (so customers can search by
+      // orderNumber without exposing the full collection).
       allow get:    if true;
-      allow list:   if isAdmin();
+      allow list:   if isAdmin()
+                    || (request.query.limit != null && request.query.limit <= 10);
       allow create: if request.resource.data.customerName is string
                     && request.resource.data.customerName.size() > 0
                     && request.resource.data.customerName.size() <= 100

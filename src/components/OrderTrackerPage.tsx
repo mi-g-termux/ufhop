@@ -279,83 +279,100 @@ export const OrderTrackerPage = ({ initialOrderNumber }: OrderTrackerPageProps) 
 
     const found: Order[] = [];
 
+    // ── Strategy 1: Query Firestore by orderNumber field ────────────────────
+    // Firestore rules allow `list` when `limit <= 10`, so this works for
+    // any visitor (not just admins). We query both upper and lower case
+    // to handle case-insensitive matching.
     try {
-      // ── Strategy 1: Try to fetch by document ID directly ──────────────────────
-      // This ALWAYS works because rules allow `allow get: if true`
-      try {
-        const { getIsFirebaseConfigured } = await import('../firebase');
-        if (getIsFirebaseConfigured()) {
-          const { db } = await import('../firebase');
-          if (db) {
-            const { doc, getDoc } = await import('firebase/firestore');
-            
-            // Try the search query as a document ID
+      const { getIsFirebaseConfigured } = await import('../firebase');
+      if (getIsFirebaseConfigured()) {
+        const { db } = await import('../firebase');
+        if (db) {
+          const { collection, query: fbQuery, where, getDocs, limit } = await import('firebase/firestore');
+          
+          // Exact match — uppercased (order numbers are stored uppercase)
+          const qUpper = fbQuery(
+            collection(db, 'orders'),
+            where('orderNumber', '==', searchQuery.toUpperCase()),
+            limit(5),
+          );
+          const snap = await getDocs(qUpper);
+          snap.forEach(d => {
+            if (!found.find(o => o.id === d.id)) {
+              found.push({ id: d.id, ...d.data() } as Order);
+            }
+          });
+
+          // If still not found, try lowercase (some older orders may be lowercase)
+          if (found.length === 0) {
+            const qLower = fbQuery(
+              collection(db, 'orders'),
+              where('orderNumber', '==', searchQuery.toLowerCase()),
+              limit(5),
+            );
+            const snap2 = await getDocs(qLower);
+            snap2.forEach(d => {
+              if (!found.find(o => o.id === d.id)) {
+                found.push({ id: d.id, ...d.data() } as Order);
+              }
+            });
+          }
+
+          // Last resort: try as Firestore document ID directly
+          // (rare — only if user pasted the raw internal ID like "ord_xxx")
+          if (found.length === 0) {
             try {
+              const { doc, getDoc } = await import('firebase/firestore');
               const orderRef = doc(db, 'orders', searchQuery);
               const orderSnap = await getDoc(orderRef);
               if (orderSnap.exists()) {
                 found.push({ id: orderSnap.id, ...orderSnap.data() } as Order);
               }
-            } catch (e) {
-              // Not a valid doc ID, continue to next strategy
+            } catch {
+              // Not a valid doc ID, that's fine
             }
           }
-        }
-      } catch (err) {
-        console.warn('[OrderTracker] Firebase getDoc failed:', err);
-      }
-
-      // ── Strategy 2: If direct fetch failed, try list query ──────────────────
-      // This requires a composite index but has better UX
-      if (found.length === 0) {
-        try {
-          const { getIsFirebaseConfigured } = await import('../firebase');
-          if (getIsFirebaseConfigured()) {
-            const { db } = await import('../firebase');
-            if (db) {
-              const { collection, query: fbQuery, where, getDocs } = await import('firebase/firestore');
-              
-              // Try exact match (case-insensitive via database)
-              const snap = await getDocs(
-                fbQuery(collection(db, 'orders'), where('orderNumber', '==', searchQuery.toUpperCase()))
-              );
-              snap.forEach(d => {
-                if (!found.find(o => o.id === d.id)) {
-                  found.push({ id: d.id, ...d.data() } as Order);
-                }
-              });
-
-              // If still not found, try lowercase too
-              if (found.length === 0) {
-                const snap2 = await getDocs(
-                  fbQuery(collection(db, 'orders'), where('orderNumber', '==', searchQuery.toLowerCase()))
-                );
-                snap2.forEach(d => {
-                  if (!found.find(o => o.id === d.id)) {
-                    found.push({ id: d.id, ...d.data() } as Order);
-                  }
-                });
-              }
-            }
-          }
-        } catch (listErr) {
-          console.warn('[OrderTracker] Firestore list query failed (index may not exist):', listErr);
-          // This is OK - we have other fallbacks
         }
       }
     } catch (err) {
       console.warn('[OrderTracker] Firebase query error:', err);
     }
 
-    // ── Strategy 3: Fall back to local orders array ──────────────────────────
-    // This works for logged-in users and admins
+    // ── Strategy 2: Supabase — query by orderNumber ────────────────────────
+    if (found.length === 0) {
+      try {
+        const { getIsSupabaseConfigured } = await import('../supabase');
+        if (getIsSupabaseConfigured()) {
+          const { getSupabaseClient } = await import('../supabase');
+          const sb = getSupabaseClient();
+          if (sb) {
+            const { data, error } = await sb
+              .from('orders')
+              .select('id, data')
+              .eq('data->>orderNumber', searchQuery.toUpperCase())
+              .limit(5);
+            if (!error && data) {
+              data.forEach((row: { id: string; data: Record<string, unknown> }) => {
+                if (!found.find(o => o.id === row.id)) {
+                  found.push({ id: row.id, ...row.data } as Order);
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[OrderTracker] Supabase query error:', err);
+      }
+    }
+
+    // ── Strategy 3: Fall back to local orders array ────────────────────────
+    // This works for admins or users with cached orders (same browser)
     if (found.length === 0 && orders && orders.length > 0) {
-      const searchLower = searchQuery.toLowerCase().toUpperCase();
+      const qLower = searchQuery.toLowerCase();
       found.push(
         ...orders.filter(o =>
-          o.orderNumber.toUpperCase().includes(searchLower) ||
-          o.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          o.orderNumber.toLowerCase().includes(searchQuery.toLowerCase())
+          o.orderNumber.toLowerCase().includes(qLower) ||
+          o.id.toLowerCase().includes(qLower)
         )
       );
     }
